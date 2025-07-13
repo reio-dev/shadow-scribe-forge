@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -10,8 +10,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { ArrowLeft, Copy, Download, FileText, Settings, Sparkles, Eye, Edit, Code, Star, GitBranch } from "lucide-react";
-import { Link } from "react-router-dom";
+import { ArrowLeft, Copy, Download, FileText, Settings, Sparkles, Eye, Edit, Code, Star, GitBranch, Loader2 } from "lucide-react";
+import { Link, useSearchParams } from "react-router-dom";
+import { useAuth } from "@/contexts/AuthContext";
+import Header from "@/components/Header";
 
 interface ProjectData {
   name: string;
@@ -26,10 +28,15 @@ interface ProjectData {
 }
 
 const ReadmeGenerator = () => {
+  const { user } = useAuth();
+  const [searchParams] = useSearchParams();
+  const repoParam = searchParams.get('repo');
+  const typeParam = searchParams.get('type');
+
   const [projectData, setProjectData] = useState<ProjectData>({
-    name: "Reflexa-ai",
-    description: "Reflexa is a modern journaling application that combines the power of AI with emotional tracking to provide personalized insights and reflections.",
-    language: "TypeScript",
+    name: "Project Name",
+    description: "Project description will be loaded from repository analysis",
+    language: "JavaScript",
     framework: "React",
     features: [],
     installation: "",
@@ -40,8 +47,10 @@ const ReadmeGenerator = () => {
 
   const [activeTab, setActiveTab] = useState("preview");
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [generatedReadme, setGeneratedReadme] = useState("");
   const [email, setEmail] = useState("");
+  const [repoData, setRepoData] = useState<any>(null);
 
   // Premium sections state
   const [premiumSections, setPremiumSections] = useState({
@@ -60,6 +69,107 @@ const ReadmeGenerator = () => {
   const [generateLogo, setGenerateLogo] = useState(false);
   const [addEmojis, setAddEmojis] = useState(false);
 
+  useEffect(() => {
+    if (repoParam) {
+      analyzeRepository();
+    }
+  }, [repoParam]);
+
+  const analyzeRepository = async () => {
+    if (!repoParam) return;
+    
+    setIsAnalyzing(true);
+    try {
+      // Fetch repository info
+      const repoResponse = await fetch(`https://api.github.com/repos/${repoParam}`);
+      if (!repoResponse.ok) throw new Error('Repository not found');
+      
+      const repoInfo = await repoResponse.json();
+      
+      // Fetch repository contents recursively
+      const contentsResponse = await fetch(`https://api.github.com/repos/${repoParam}/contents`);
+      const contents = contentsResponse.ok ? await contentsResponse.json() : [];
+      
+      // Fetch package.json if exists
+      let packageJson = null;
+      try {
+        const packageResponse = await fetch(`https://api.github.com/repos/${repoParam}/contents/package.json`);
+        if (packageResponse.ok) {
+          const packageData = await packageResponse.json();
+          packageJson = JSON.parse(atob(packageData.content));
+        }
+      } catch (e) {
+        // package.json doesn't exist or is not accessible
+      }
+
+      // Analyze the repository structure and content
+      const analysis = await analyzeRepositoryContent(repoInfo, contents, packageJson);
+      
+      setRepoData(repoInfo);
+      setProjectData({
+        name: repoInfo.name,
+        description: repoInfo.description || "No description available",
+        language: repoInfo.language || "Unknown",
+        framework: analysis.framework,
+        features: analysis.features,
+        installation: analysis.installation,
+        usage: analysis.usage,
+        contributing: !!repoInfo.has_issues,
+        license: repoInfo.license?.name || "MIT"
+      });
+      
+      toast.success("Repository analyzed successfully!");
+    } catch (error) {
+      console.error('Error analyzing repository:', error);
+      toast.error("Failed to analyze repository. Please check the URL and try again.");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const analyzeRepositoryContent = async (repoInfo: any, contents: any[], packageJson: any) => {
+    let framework = "Unknown";
+    let features = [];
+    let installation = "";
+    let usage = "";
+
+    // Detect framework from package.json dependencies
+    if (packageJson?.dependencies) {
+      if (packageJson.dependencies.react) framework = "React";
+      else if (packageJson.dependencies.vue) framework = "Vue.js";
+      else if (packageJson.dependencies.angular || packageJson.dependencies["@angular/core"]) framework = "Angular";
+      else if (packageJson.dependencies.next) framework = "Next.js";
+      else if (packageJson.dependencies.nuxt) framework = "Nuxt.js";
+      else if (packageJson.dependencies.express) framework = "Express.js";
+      else if (packageJson.dependencies.fastify) framework = "Fastify";
+    }
+
+    // Generate installation instructions
+    if (packageJson) {
+      installation = `\`\`\`bash
+npm install
+# or
+yarn install
+# or
+pnpm install
+\`\`\``;
+    }
+
+    // Generate basic usage from scripts
+    if (packageJson?.scripts) {
+      const startScript = packageJson.scripts.start || packageJson.scripts.dev || packageJson.scripts.serve;
+      if (startScript) {
+        usage = `\`\`\`bash
+npm start
+# or
+npm run dev
+\`\`\``;
+      }
+    }
+
+    return { framework, features, installation, usage };
+  };
+
   const handleInputChange = (field: keyof ProjectData, value: any) => {
     setProjectData(prev => ({
       ...prev,
@@ -71,30 +181,53 @@ const ReadmeGenerator = () => {
     setIsGenerating(true);
     
     try {
-      const prompt = `Generate a comprehensive README.md file for a project with the following details:
+      const repoOwner = repoParam?.split('/')[0] || 'user';
+      const repoName = repoParam?.split('/')[1] || projectData.name;
+      
+      const prompt = `Generate a comprehensive and professional README.md file for the GitHub repository "${repoParam || projectData.name}" with the following details:
       
       Project Name: ${projectData.name}
       Description: ${projectData.description}
       Programming Language: ${projectData.language}
       Framework: ${projectData.framework}
+      Repository URL: ${repoParam ? `https://github.com/${repoParam}` : ''}
+      Stars: ${repoData?.stargazers_count || 0}
+      Forks: ${repoData?.forks_count || 0}
+      License: ${projectData.license}
       
-      Please include:
-      - Professional project title with badges from shields.io
-      - Detailed description and features
-      - Table of contents
-      - Installation instructions
-      - Usage examples
-      - Technology stack with shields.io badges
-      - Contributing guidelines if requested
-      - License information
+      Please include these sections with proper markdown formatting:
       
-      Use proper Markdown formatting and include shields.io badges for:
-      - Language (${projectData.language})
-      - Framework (${projectData.framework})
-      - License (${projectData.license})
-      - Last commit, stars, and other dynamic badges
+      1. **Header Section with Badges**: Include shields.io badges for:
+         - GitHub stars: ![GitHub stars](https://img.shields.io/github/stars/${repoOwner}/${repoName}?style=social)
+         - GitHub forks: ![GitHub forks](https://img.shields.io/github/forks/${repoOwner}/${repoName}?style=social)
+         - License: ![License](https://img.shields.io/github/license/${repoOwner}/${repoName})
+         - Language: ![Language](https://img.shields.io/github/languages/top/${repoOwner}/${repoName})
+         - Last commit: ![Last commit](https://img.shields.io/github/last-commit/${repoOwner}/${repoName})
+         - Issues: ![Issues](https://img.shields.io/github/issues/${repoOwner}/${repoName})
+         - Pull Requests: ![PRs](https://img.shields.io/github/issues-pr/${repoOwner}/${repoName})
       
-      Make it professional and comprehensive.`;
+      2. **Table of Contents** - Interactive navigation
+      3. **About the Project** - Detailed description with key features
+      4. **Built With** - Technology stack with framework badges
+      5. **Getting Started** - Prerequisites and installation
+      6. **Usage** - Code examples and screenshots
+      7. **Roadmap** - Future features and improvements
+      8. **Contributing** - Guidelines for contributors
+      9. **License** - License information
+      10. **Contact** - How to reach the maintainers
+      11. **Acknowledgments** - Credits and thanks
+      
+      Requirements:
+      - Use proper markdown syntax with headers, code blocks, and formatting
+      - Include multiple shields.io badges for professional appearance
+      - Add emojis to section headers for visual appeal
+      - Make it comprehensive and professional looking
+      - Include code examples with syntax highlighting
+      - Add installation instructions with multiple package managers (npm, yarn, pnpm)
+      - Include usage examples with actual code snippets
+      - Make the content engaging and informative
+      
+      Make it look like a top-tier open source project README with all the bells and whistles!`;
 
       const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent', {
         method: 'POST',
@@ -158,30 +291,37 @@ const ReadmeGenerator = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b border-border-subtle bg-surface-elevated/50 backdrop-blur-md">
-        <div className="container max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-4">
+      <Header />
+      
+      {isAnalyzing && (
+        <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center">
+          <Card className="bg-surface-elevated border-border-subtle p-8">
+            <div className="text-center">
+              <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto mb-4" />
+              <h3 className="text-lg font-semibold mb-2">Analyzing Repository</h3>
+              <p className="text-muted-foreground">
+                Scanning {repoParam} for project structure, dependencies, and content...
+              </p>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      <div className="container max-w-7xl mx-auto px-4 py-8 mt-16">
+        {repoParam && (
+          <div className="mb-8 flex items-center justify-between">
+            <div>
+              <h1 className="text-3xl font-bold mb-2">README Generator</h1>
+              <p className="text-muted-foreground">
+                Generating documentation for <code className="bg-surface-elevated px-2 py-1 rounded">{repoParam}</code>
+              </p>
+            </div>
             <Link to="/dashboard" className="flex items-center gap-2 text-muted-foreground hover:text-foreground">
               <ArrowLeft className="w-4 h-4" />
-              Dashboard
+              Back to Dashboard
             </Link>
           </div>
-          
-          <div className="flex items-center gap-4">
-            <Button variant="outline" size="sm" onClick={copyToClipboard} disabled={!generatedReadme}>
-              <Copy className="w-4 h-4 mr-2" />
-              Copy
-            </Button>
-            <Button variant="outline" size="sm" onClick={downloadReadme} disabled={!generatedReadme}>
-              <Download className="w-4 h-4 mr-2" />
-              Download
-            </Button>
-          </div>
-        </div>
-      </header>
-
-      <div className="container max-w-7xl mx-auto px-4 py-8">
+        )}
         <div className="grid lg:grid-cols-3 gap-8">
           {/* Left Sidebar - Configuration */}
           <div className="space-y-6">
@@ -192,18 +332,20 @@ const ReadmeGenerator = () => {
                   <CardTitle className="text-lg">{projectData.name}</CardTitle>
                   <Badge variant="secondary">{projectData.language}</Badge>
                 </div>
-                <CardDescription>{projectData.description}</CardDescription>
-                <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                  <div className="flex items-center gap-1">
-                    <Star className="w-3 h-3" />
-                    0
+                <CardDescription className="line-clamp-3">{projectData.description}</CardDescription>
+                {repoData && (
+                  <div className="flex items-center gap-4 text-xs text-muted-foreground mt-2">
+                    <div className="flex items-center gap-1">
+                      <Star className="w-3 h-3" />
+                      {repoData.stargazers_count}
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <GitBranch className="w-3 h-3" />
+                      {repoData.forks_count}
+                    </div>
+                    <span>Updated {new Date(repoData.updated_at).toLocaleDateString()}</span>
                   </div>
-                  <div className="flex items-center gap-1">
-                    <GitBranch className="w-3 h-3" />
-                    0
-                  </div>
-                  <span>Updated 1d ago</span>
-                </div>
+                )}
               </CardHeader>
             </Card>
 
@@ -422,15 +564,40 @@ const ReadmeGenerator = () => {
 
               <TabsContent value="preview" className="space-y-0">
                 <Card className="bg-surface-elevated border-border-subtle min-h-[600px]">
-                  <CardHeader className="border-b border-border-subtle">
+                  <CardHeader className="border-b border-border-subtle flex flex-row items-center justify-between">
                     <CardTitle className="text-lg">README Preview</CardTitle>
+                    {generatedReadme && (
+                      <div className="flex items-center gap-2">
+                        <Button variant="outline" size="sm" onClick={copyToClipboard}>
+                          <Copy className="w-4 h-4 mr-2" />
+                          Copy
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={downloadReadme}>
+                          <Download className="w-4 h-4 mr-2" />
+                          Download
+                        </Button>
+                      </div>
+                    )}
                   </CardHeader>
                   <CardContent className="p-6">
                     {generatedReadme ? (
-                      <div className="prose prose-invert max-w-none">
-                        <pre className="whitespace-pre-wrap text-sm text-foreground font-mono">
-                          {generatedReadme}
-                        </pre>
+                      <div className="prose prose-slate dark:prose-invert max-w-none">
+                        <div 
+                          className="markdown-content text-sm"
+                          dangerouslySetInnerHTML={{ 
+                            __html: generatedReadme
+                              .replace(/### /g, '<h3>')
+                              .replace(/## /g, '<h2>')
+                              .replace(/# /g, '<h1>')
+                              .replace(/```(\w+)?\n([\s\S]*?)```/g, '<pre class="bg-surface-elevated p-4 rounded-lg overflow-x-auto"><code>$2</code></pre>')
+                              .replace(/`([^`]+)`/g, '<code class="bg-surface-elevated px-1 py-0.5 rounded text-xs">$1</code>')
+                              .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                              .replace(/\*(.*?)\*/g, '<em>$1</em>')
+                              .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img alt="$1" src="$2" class="max-w-full h-auto rounded-lg"/>')
+                              .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-primary hover:underline">$1</a>')
+                              .replace(/\n/g, '<br/>')
+                          }} 
+                        />
                       </div>
                     ) : (
                       <div className="text-center py-20 text-muted-foreground">
